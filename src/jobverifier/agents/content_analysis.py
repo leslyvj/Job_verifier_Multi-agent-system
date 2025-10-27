@@ -4,30 +4,34 @@ import math
 import re
 from typing import Dict, List, Optional
 
-from ..services.llm import structured_chat
+from ..services.llm import llm_available, structured_chat
 from .base import Agent, JobContext
 
-COMMON_SUSPICIOUS_PHRASES = [
-    "no experience",
-    "work from home",
-    "quick money",
-    "cash daily",
-    "guaranteed income",
-    "start today",
-    "limited slots",
-    "training fee",
+# Extremely obvious scam patterns only (reduced from aggressive list)
+EXTREME_SCAM_PHRASES = [
+    "send money",
+    "cash daily guaranteed",
+    "pay upfront fee",
+    "send gift card",
 ]
 
-POOR_LANGUAGE_INDICATORS = ["??", "!!!", "???", "!!!", "--", "@@"]
+# Critical financial red flags (only unambiguous scam patterns)
+CRITICAL_FINANCIAL_FLAGS = [
+    "send bitcoin",
+    "wire money upfront",
+    "purchase gift card",
+]
 
 
 class ContentAnalysisAgent(Agent):
-    """Evaluates text quality and extracts structured content signals."""
+    """Evaluates text quality, financial risk patterns, and extracts structured content signals using LLM-first approach."""
 
     name = "content_analysis"
     _LLM_SYSTEM_PROMPT = (
-        "You are an assistant that audits job postings for language quality, "
-        "fraud risk signals, and exposure of personal data requests. "
+        "You are an expert job posting fraud analyst. Your role is to evaluate job postings with nuance and context. "
+        "Many legitimate jobs may have features that could seem suspicious in isolation (e.g., 'work from home', "
+        "'no experience required', legitimate training programs). Focus on COMBINATIONS of red flags and CONTEXT. "
+        "Only flag severe, unambiguous scam patterns. When in doubt, lean toward legitimacy. "
         "Respond using compact JSON only."
     )
 
@@ -42,63 +46,137 @@ class ContentAnalysisAgent(Agent):
                 "content_analysis", {}
             )
             insight["note"] = "Content analysis skipped due to incomplete scrape"
-            context.meta["content_score"] = 0
+            context.meta["content_score"] = 100  # Don't penalize for scraping issues
+            context.meta["financial_score"] = 100
             return context
 
         if not text:
             context.add_flag("content", "Job description missing or empty")
-            context.meta["content_score"] = 0
+            context.meta["content_score"] = 50  # Neutral score, not failure
+            context.meta["financial_score"] = 100
             return context
 
-        flags = self._evaluate_language_quality(text)
-        for flag in flags:
-            context.add_flag("content", flag)
-
-        suspicious_phrases = self._find_suspicious_phrases(text)
-        for phrase in suspicious_phrases:
-            context.add_flag("content", f"Suspicious phrase detected: {phrase}")
-
-        llm_feedback = self._llm_review_content(context.title, text)
+        # LLM-first analysis - primary intelligence
+        llm_feedback = self._llm_review_content(context.title, text, context)
+        
         if llm_feedback:
-            insights_bucket = context.meta.setdefault("insights", {}).setdefault(
+            self._process_llm_feedback(context, llm_feedback)
+        else:
+            # LLM unavailable - use minimal heuristics only
+            context.meta.setdefault("insights", {}).setdefault(
                 "content_analysis", {}
-            )
-            summary = llm_feedback.get("summary")
-            if summary:
-                insights_bucket["llm_summary"] = summary
-            for flag in llm_feedback.get("risk_flags", []) or []:
-                context.add_flag("content", flag)
-            pii_mentions = llm_feedback.get("pii_mentions") or []
-            for pii in pii_mentions:
-                if pii:
-                    context.add_flag("content", f"PII request noted: {pii}")
-            if pii_mentions:
-                insights_bucket["pii_mentions"] = pii_mentions
+            )["note"] = "LLM unavailable; using basic heuristics"
+            self._fallback_analysis(context, text)
 
-        score = self._score_content(len(tokens), flags, suspicious_phrases)
-        context.meta["content_score"] = score
         return context
 
     def _llm_review_content(
-        self, title: Optional[str], description: str
+        self, title: Optional[str], description: str, context: JobContext
     ) -> Optional[Dict[str, object]]:
+        """Primary LLM-based content analysis with context awareness."""
+        if not llm_available():
+            return None
+            
+        company = context.company or "Unknown"
+        source_domain = context.meta.get("source_domain", "Unknown")
+        
         prompt = (
-            "Evaluate the following job posting content for warning signs.\n"
-            "Return JSON with keys: summary (string), risk_flags (array of short strings), "
-            "pii_mentions (array of short strings describing any requests for sensitive data).\n"
-            "Focus on language quality issues, unrealistic offers, pressure tactics, or personal data requests.\n"
-            f"Job title: {title or 'Unknown'}\n"
-            f"Description:\n{description[:4000]}"
+            "Analyze this job posting for fraud indicators. Consider the full context before flagging.\n\n"
+            "LEGITIMATE features you should NOT flag:\n"
+            "- 'Work from home' or 'remote' (common for tech/modern jobs)\n"
+            "- 'No experience required' (legitimate for entry-level)\n"
+            "- Mentioning training programs (normal for many companies)\n"
+            "- Crypto/blockchain jobs (legitimate industry)\n"
+            "- Asking for standard background checks or references\n\n"
+            "ACTUAL red flags (flag only if MULTIPLE present or EXTREME):\n"
+            "- Requests to send money, gift cards, or wire transfers UPFRONT\n"
+            "- Asking for SSN/bank info BEFORE interview/offer\n"
+            "- Guaranteed income with no work described\n"
+            "- Extreme urgency ('act now', 'limited slots') + vague job description\n"
+            "- Grammar/spelling errors + unrealistic promises\n\n"
+            f"Company: {company}\n"
+            f"Source Domain: {source_domain}\n"
+            f"Job Title: {title or 'Unknown'}\n"
+            f"Description:\n{description[:4000]}\n\n"
+            "Return JSON with:\n"
+            "- content_score (0-100, where 100=perfect, 50=neutral, 0=extreme scam)\n"
+            "- financial_score (0-100, based on money scam patterns only)\n"
+            "- risk_flags (array of specific concerns, empty if legit)\n"
+            "- pii_flags (array of inappropriate data requests, empty if none)\n"
+            "- summary (brief assessment)\n"
+            "- confidence (0-100, your confidence in this assessment)"
         )
+        
         response = structured_chat(
             prompt,
             system_prompt=self._LLM_SYSTEM_PROMPT,
             model="mistral-small-latest",
-            max_tokens=400,
+            max_tokens=500,
+            temperature=0.1,  # Lower temperature for consistency
         )
-        if response and isinstance(response, dict):
-            return response
-        return None
+        
+        return response if response and isinstance(response, dict) else None
+
+    def _process_llm_feedback(self, context: JobContext, feedback: Dict[str, object]) -> None:
+        """Process LLM feedback and update context."""
+        insights = context.meta.setdefault("insights", {}).setdefault("content_analysis", {})
+        
+        # Store LLM assessment
+        insights["llm_summary"] = feedback.get("summary", "")
+        insights["llm_confidence"] = feedback.get("confidence", 50)
+        
+        # Set scores from LLM
+        context.meta["content_score"] = max(0, min(100, int(feedback.get("content_score", 75))))
+        context.meta["financial_score"] = max(0, min(100, int(feedback.get("financial_score", 100))))
+        
+        # Add flags only if LLM identified specific issues
+        for flag in feedback.get("risk_flags", []) or []:
+            if flag and isinstance(flag, str):
+                context.add_flag("content", flag)
+        
+        for flag in feedback.get("pii_flags", []) or []:
+            if flag and isinstance(flag, str):
+                context.add_flag("financial", f"Inappropriate data request: {flag}")
+        
+        # Only check extreme scam phrases if LLM had concerns
+        if context.meta["content_score"] < 60 or context.meta["financial_score"] < 60:
+            self._check_extreme_patterns(context)
+
+    def _fallback_analysis(self, context: JobContext, text: str) -> None:
+        """Minimal fallback when LLM is unavailable - very conservative."""
+        lower_text = text.lower()
+        
+        # Only check for EXTREME scam patterns
+        extreme_found = False
+        for phrase in EXTREME_SCAM_PHRASES:
+            if phrase in lower_text:
+                context.add_flag("content", f"Critical scam phrase: {phrase}")
+                extreme_found = True
+        
+        for phrase in CRITICAL_FINANCIAL_FLAGS:
+            if phrase in lower_text:
+                context.add_flag("financial", f"Critical financial scam: {phrase}")
+                extreme_found = True
+        
+        # Very lenient scoring without LLM
+        if extreme_found:
+            context.meta["content_score"] = 30
+            context.meta["financial_score"] = 20
+        else:
+            context.meta["content_score"] = 75  # Assume legitimate
+            context.meta["financial_score"] = 90
+
+    def _check_extreme_patterns(self, context: JobContext) -> None:
+        """Double-check for extreme scam patterns when LLM has concerns."""
+        text = (context.trimmed_description or "").lower()
+        
+        for phrase in EXTREME_SCAM_PHRASES:
+            if phrase in text:
+                context.add_flag("content", f"Extreme scam indicator: {phrase}")
+        
+        for phrase in CRITICAL_FINANCIAL_FLAGS:
+            if phrase in text:
+                context.add_flag("financial", f"Extreme financial scam: {phrase}")
 
     @staticmethod
     def _extract_job_role(title: str | None) -> str:
@@ -108,38 +186,3 @@ class ContentAnalysisAgent(Agent):
         normalized = re.sub(r"\s+-\s+.*$", "", normalized)
         return normalized.strip() or "Unknown Role"
 
-    @staticmethod
-    def _evaluate_language_quality(text: str) -> List[str]:
-        flags: List[str] = []
-        sentences = [seg.strip() for seg in re.split(r"[.!?]", text) if seg.strip()]
-        average_sentence_length = (
-            sum(len(sentence.split()) for sentence in sentences) / len(sentences)
-            if sentences
-            else 0
-        )
-        if average_sentence_length < 7:
-            flags.append("Very short sentences suggest low-quality copy")
-        uppercase_ratio = sum(1 for ch in text if ch.isupper()) / max(len(text), 1)
-        if uppercase_ratio > 0.25:
-            flags.append("Excessive uppercase usage")
-        punctuation_noise = sum(text.count(token) for token in POOR_LANGUAGE_INDICATORS)
-        if punctuation_noise:
-            flags.append("Noisy punctuation patterns detected")
-        return flags
-
-    @staticmethod
-    def _find_suspicious_phrases(text: str) -> List[str]:
-        lower_text = text.lower()
-        return [phrase for phrase in COMMON_SUSPICIOUS_PHRASES if phrase in lower_text]
-
-    @staticmethod
-    def _score_content(token_count: int, flags: List[str], phrases: List[str]) -> int:
-        base_score = 100
-        penalty = 0
-        penalty += len(flags) * 15
-        penalty += len(phrases) * 10
-        if token_count < 80:
-            penalty += 10
-        if token_count > 600:
-            penalty += 5
-        return max(0, math.floor(base_score - penalty))

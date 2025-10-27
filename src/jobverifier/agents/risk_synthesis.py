@@ -3,15 +3,16 @@ from __future__ import annotations
 from collections import Counter
 from typing import Optional
 
-from ..services.llm import chat
+from ..services.llm import chat, llm_available
 from .base import Agent, JobContext
 
+# Reduced weights to minimize false positives
 CATEGORY_WEIGHTS = {
-    "acquisition": 0.3,  # Reduced: scraping issues != scam indicators
-    "content": 1.1,
-    "verification": 1.3,
-    "financial": 1.6,
-    "intelligence": 0.9,
+    "acquisition": 0.1,  # Very low: scraping issues aren't fraud indicators
+    "content": 0.8,  # Reduced from 1.1
+    "verification": 0.9,  # Reduced from 1.3
+    "financial": 1.4,  # Reduced from 1.6, still highest priority
+    "intelligence": 0.6,  # Reduced from 0.9
 }
 
 
@@ -39,14 +40,30 @@ class RiskSynthesisAgent(Agent):
             
             # Further reduce weight of acquisition flags for trusted domains
             if category == "acquisition" and is_trusted:
-                weight = 0.1  # Almost ignore acquisition issues on trusted sites
+                weight = 0.05  # Almost ignore acquisition issues on trusted sites
             
-            weighted_total += flag_count * 20 * weight
-            total_weight += 20 * weight
+            weighted_total += flag_count * 15 * weight  # Reduced from 20
+            total_weight += 15 * weight
 
         risk_score = min(100, round(weighted_total)) if total_weight else 0
         verdict = self._derive_verdict(risk_score, flag_counter, is_trusted, scraping_incomplete)
-        confidence = max(0, 100 - risk_score)
+        
+        # LLM sanity check - override if it disagrees strongly
+        if llm_available() and verdict in ["fake", "suspicious"]:
+            llm_verdict = self._llm_sanity_check(context, verdict, risk_score, flag_counter)
+            if llm_verdict and llm_verdict != verdict:
+                # Store original verdict in insights
+                context.meta.setdefault("insights", {}).setdefault("risk_synthesis", {})[
+                    "heuristic_verdict"
+                ] = verdict
+                verdict = llm_verdict
+        
+        confidence = max(0, min(100, 100 - risk_score))
+
+        # Use .get() for all score fields to handle missing values gracefully
+        content_score = context.meta.get("content_score", 75)
+        verification_score = context.meta.get("verification_score", 75)
+        financial_score = context.meta.get("financial_score", 100)
 
         context.meta.update(
             {
@@ -54,6 +71,9 @@ class RiskSynthesisAgent(Agent):
                 "confidence": confidence,
                 "verdict": verdict,
                 "flag_summary": dict(flag_counter),
+                "content_score": content_score,
+                "verification_score": verification_score,
+                "financial_score": financial_score,
             }
         )
 
@@ -76,14 +96,78 @@ class RiskSynthesisAgent(Agent):
             
             if other_flags == 0:
                 return "incomplete_data"  # Only acquisition flags on trusted site
-            # If there are content/financial red flags even on trusted site, still flag
         
-        # Normal verdict logic
-        if risk_score >= 70 or flag_counter.get("financial", 0) >= 2:
+        # Much stricter thresholds to reduce false positives
+        financial_flags = flag_counter.get("financial", 0)
+        content_flags = flag_counter.get("content", 0)
+        
+        # Only flag as fake if EXTREME evidence
+        if financial_flags >= 3:  # Multiple serious financial red flags
             return "fake"
-        if risk_score >= 45 or flag_counter.total() >= 4:
+        if risk_score >= 85:  # Very high risk score
+            return "fake"
+        
+        # Suspicious requires moderate evidence
+        if risk_score >= 60 or (financial_flags >= 2 and content_flags >= 2):
             return "suspicious"
+        
+        # Default to legit unless strong evidence of scam
         return "legit"
+
+    def _llm_sanity_check(
+        self, context: JobContext, heuristic_verdict: str, risk_score: int, flag_counter: Counter
+    ) -> Optional[str]:
+        """Ask LLM to review the verdict and override if it's a false positive."""
+        flags = context.flags
+        flag_lines = []
+        for category, entries in flags.items():
+            if not entries:
+                continue
+            preview = "; ".join(entries[:5])
+            flag_lines.append(f"{category}: {preview}")
+        flag_text = " | ".join(flag_lines) if flag_lines else "no flags"
+        
+        prompt = (
+            "Review this job posting fraud assessment. The heuristic system flagged it as potentially fraudulent, "
+            "but we need your expert opinion to avoid false positives.\n\n"
+            f"Job Title: {context.title or 'Unknown'}\n"
+            f"Company: {context.company or 'Unknown'}\n"
+            f"Source Domain: {context.meta.get('source_domain', 'Unknown')}\n"
+            f"Heuristic Verdict: {heuristic_verdict}\n"
+            f"Risk Score: {risk_score}/100\n"
+            f"Flags Raised: {flag_text}\n\n"
+            "Question: Is this job posting ACTUALLY a scam, or could it be legitimate?\n\n"
+            "Consider:\n"
+            "- Are the flags contextually reasonable for this company/industry?\n"
+            "- Could this be a legitimate job with poorly worded description?\n"
+            "- Are we over-reacting to common phrases?\n\n"
+            "Respond with ONLY ONE WORD:\n"
+            "- 'fake' if you're confident it's a scam\n"
+            "- 'suspicious' if you're unsure but concerned\n"
+            "- 'legit' if you believe it's legitimate despite the flags"
+        )
+        
+        response = chat(
+            prompt,
+            system_prompt=(
+                "You are a senior fraud analyst. Avoid false positives. Many legitimate jobs have features "
+                "that could seem suspicious in isolation. Be skeptical but fair."
+            ),
+            model="mistral-small-latest",
+            max_tokens=50,
+            temperature=0.1,
+        )
+        
+        if response:
+            response_lower = response.strip().lower()
+            if "legit" in response_lower:
+                return "legit"
+            elif "suspicious" in response_lower:
+                return "suspicious"
+            elif "fake" in response_lower:
+                return "fake"
+        
+        return None  # Keep original verdict if LLM unclear
 
     def _llm_generate_summary(
         self, context: JobContext, risk_score: int, verdict: str

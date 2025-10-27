@@ -8,8 +8,6 @@ from langgraph.graph import END, START, StateGraph
 from ..agents import (
     ContentAnalysisAgent,
     DataAcquisitionAgent,
-    CompanyIntelligenceAgent,
-    FinancialRiskAgent,
     JobContext,
     RiskSynthesisAgent,
     SourceVerificationAgent,
@@ -27,14 +25,8 @@ def _add_common_nodes(graph: StateGraph, prev: str) -> None:
     graph.add_node("source_verification", _verification_node)
     graph.add_edge("content_analysis", "source_verification")
 
-    graph.add_node("company_intelligence", _intelligence_node)
-    graph.add_edge("source_verification", "company_intelligence")
-
-    graph.add_node("financial_risk", _financial_node)
-    graph.add_edge("company_intelligence", "financial_risk")
-
     graph.add_node("risk_synthesis", _synthesis_node)
-    graph.add_edge("financial_risk", "risk_synthesis")
+    graph.add_edge("source_verification", "risk_synthesis")
     graph.add_edge("risk_synthesis", END)
 
 
@@ -55,20 +47,6 @@ def _content_node(state: AgentState) -> AgentState:
 def _verification_node(state: AgentState) -> AgentState:
     context = state["context"]
     agent = SourceVerificationAgent()
-    context = agent.run(context)
-    return {"context": context}
-
-
-def _intelligence_node(state: AgentState) -> AgentState:
-    context = state["context"]
-    agent = CompanyIntelligenceAgent()
-    context = agent.run(context)
-    return {"context": context}
-
-
-def _financial_node(state: AgentState) -> AgentState:
-    context = state["context"]
-    agent = FinancialRiskAgent()
     context = agent.run(context)
     return {"context": context}
 
