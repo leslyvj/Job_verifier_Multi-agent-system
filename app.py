@@ -203,9 +203,10 @@ def display_company_intel(intel: dict) -> None:
 
 def display_result(result: dict) -> None:
     """Display verification result with formatting."""
-    verdict = result["verdict"]
-    risk_score = result["risk_score"]
-    confidence = result["confidence"]
+    # Use .get to avoid KeyError when fields are missing
+    verdict = result.get("verdict", "error")
+    risk_score = result.get("risk_score")
+    confidence = result.get("confidence")
     
     # Verdict banner
     emoji = get_verdict_emoji(verdict)
@@ -225,17 +226,23 @@ def display_result(result: dict) -> None:
     # Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        risk_color = get_risk_score_color(risk_score)
-        st.markdown(
-            f'<p class="{risk_color}">Risk Score: {risk_score}/100</p>',
-            unsafe_allow_html=True,
-        )
+        # Handle missing or non-numeric risk_score gracefully
+        if isinstance(risk_score, (int, float)):
+            risk_color = get_risk_score_color(int(risk_score))
+            st.markdown(
+                f'<p class="{risk_color}">Risk Score: {int(risk_score)}/100</p>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<p style="color:#6c757d">Risk Score: N/A</p>',
+                unsafe_allow_html=True,
+            )
     with col2:
-        st.metric("Confidence", f"{confidence}%")
+        st.metric("Confidence", f"{confidence}%" if confidence is not None else "N/A")
     with col3:
-        st.metric("Scraping Method", result["summary"].get("scraping_method", "N/A"))
-
-    summary = result["summary"]
+        summary = result.get("summary", {})
+        st.metric("Scraping Method", summary.get("scraping_method", "N/A"))
     scraping_info = summary.get("insights", {}).get("scraping", {})
     scraping_incomplete = scraping_info.get("status") == "incomplete" or summary.get("scraping_incomplete")
     if scraping_incomplete:
@@ -248,15 +255,16 @@ def display_result(result: dict) -> None:
     # Source info
     st.subheader("📋 Source Information")
     col1, col2 = st.columns(2)
+    source = result.get("source", {})
     with col1:
-        st.write(f"**Title:** {result['source'].get('title', 'N/A')}")
-        st.write(f"**Company:** {result['source'].get('company', 'N/A')}")
+        st.write(f"**Title:** {source.get('title', 'N/A')}")
+        st.write(f"**Company:** {source.get('company', 'N/A')}")
     with col2:
-        st.write(f"**URL:** {result['source']['url']}")
-        st.write(f"**Domain:** {result['summary'].get('source_domain', 'N/A')}")
-    
+        st.write(f"**URL:** {source.get('url', 'N/A')}")
+        st.write(f"**Domain:** {summary.get('source_domain', 'N/A')}")
+
     # Flags
-    display_flags(result["flags"])
+    display_flags(result.get("flags", {}))
     
     # Company Intelligence
     if summary.get("company_intel"):
@@ -293,11 +301,11 @@ def display_result(result: dict) -> None:
                 st.metric("Scraped At", scraped_at[:19])
         
         st.write("**Flag Summary:**")
-        st.json(result["summary"].get("flag_summary", {}))
+        st.json(summary.get("flag_summary", {}))
         
-        if result["summary"].get("insights"):
+        if summary.get("insights"):
             st.write("**Insights:**")
-            st.json(result["summary"]["insights"])
+            st.json(summary["insights"]) 
 
 
 def main():
@@ -347,8 +355,8 @@ def main():
                     {
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "url": url_input.strip(),
-                        "verdict": result["verdict"],
-                        "risk_score": result["risk_score"],
+                        "verdict": result.get("verdict", "error"),
+                        "risk_score": result.get("risk_score"),
                     },
                 )
             except Exception as exc:
@@ -362,15 +370,26 @@ def main():
         with st.sidebar:
             st.subheader("📚 Recent Analyses")
             for i, hist_item in enumerate(st.session_state.results_history[:10]):
-                emoji = get_verdict_emoji(hist_item["verdict"])
-                risk_score = hist_item["risk_score"]
-                risk_color = "red" if risk_score >= 70 else "orange" if risk_score >= 40 else "green"
-                
+                verdict_label = hist_item.get("verdict", "unknown")
+                emoji = get_verdict_emoji(verdict_label)
+                rs = hist_item.get("risk_score")
+                # Decide color and display value for possibly-missing risk score
+                try:
+                    rs_val = int(rs) if rs is not None else None
+                except Exception:
+                    rs_val = None
+
+                if rs_val is None:
+                    risk_color = "gray"
+                    rs_display = "N/A"
+                else:
+                    risk_color = "red" if rs_val >= 70 else "orange" if rs_val >= 40 else "green"
+                    rs_display = f"{rs_val}"
+
                 with st.expander(
-                    f"{emoji} {hist_item['verdict'].replace('_', ' ').title()} "
-                    f"({hist_item['risk_score']}/100) - {hist_item['timestamp']}"
+                    f"{emoji} {verdict_label.replace('_', ' ').title()} ({rs_display}/100) - {hist_item.get('timestamp', '')}"
                 ):
-                    st.write(f"**URL:** {hist_item['url']}")
+                    st.write(f"**URL:** {hist_item.get('url', 'N/A')}")
                     if st.button("🔄 Re-analyze", key=f"reanalyze_{i}"):
                         st.session_state.url_input = hist_item["url"]
                         st.rerun()

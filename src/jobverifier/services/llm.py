@@ -5,12 +5,10 @@ import logging
 from typing import Any, Dict, List, Optional
 
 try:  # Optional dependency
-    from mistralai.client import MistralClient  # type: ignore[import]
-    from mistralai.models.chat_completion import ChatMessage  # type: ignore[import]
+    from mistralai import Mistral  # type: ignore[import]
     _MISTRAL_AVAILABLE = True
 except ImportError:  # pragma: no cover - environment without package
-    MistralClient = None  # type: ignore[assignment]
-    ChatMessage = None  # type: ignore[assignment]
+    Mistral = None  # type: ignore[assignment]
     _MISTRAL_AVAILABLE = False
 
 from ..config import MISTRAL_API_KEY
@@ -24,15 +22,16 @@ def _get_client() -> Optional[Any]:
     global _CLIENT
     if _CLIENT is None:
         if not MISTRAL_API_KEY:
-            logger.debug("Mistral API key not configured; LLM features disabled")
+            logger.warning("❌ Mistral API key not configured; LLM features disabled")
             return None
         if not _MISTRAL_AVAILABLE:
-            logger.debug("mistralai package not installed; LLM features disabled")
+            logger.warning("❌ mistralai package not installed; LLM features disabled")
             return None
         try:
-            _CLIENT = MistralClient(api_key=MISTRAL_API_KEY)
+            _CLIENT = Mistral(api_key=MISTRAL_API_KEY)
+            logger.info("✅ Mistral client initialized successfully with API key: %s***", MISTRAL_API_KEY[:8])
         except Exception as exc:  # pragma: no cover - network/creds errors
-            logger.warning("Failed to initialize Mistral client: %s", exc)
+            logger.error("❌ Failed to initialize Mistral client: %s", exc)
             _CLIENT = None
     return _CLIENT
 
@@ -46,23 +45,26 @@ def chat(
     max_tokens: int = 512,
 ) -> Optional[str]:
     client = _get_client()
-    if not client or not _MISTRAL_AVAILABLE or ChatMessage is None:
+    if not client or not _MISTRAL_AVAILABLE:
+        logger.warning("❌ LLM call skipped - client not available")
         return None
 
-    messages: List[Any] = []
+    messages: List[Dict[str, str]] = []
     if system_prompt:
-        messages.append(ChatMessage(role="system", content=system_prompt))
-    messages.append(ChatMessage(role="user", content=prompt))
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
 
     try:
-        response = client.chat(
+        logger.info("🤖 Calling Mistral API with model: %s", model)
+        response = client.chat.complete(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        logger.info("✅ Mistral API call successful")
     except Exception as exc:  # pragma: no cover - remote call
-        logger.warning("Mistral chat call failed: %s", exc)
+        logger.error("❌ Mistral chat call failed: %s", exc)
         return None
 
     content = _extract_content(response)
