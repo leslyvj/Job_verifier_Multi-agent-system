@@ -67,4 +67,4 @@ Open the provided URL in your browser (default: <http://localhost:8501>) and pas
 3. Run unit or integration tests (if added) before submitting changes.
 4. Enhance agents by adding new heuristics or integrating additional data sources.
 
-Feel free to open issues or submit pull requests for bug fixes, improvements, or new agent ideas.
+Feel free to open issues or submit pull requests for bug fixes, improvements, or new agent ideas.Lesly
