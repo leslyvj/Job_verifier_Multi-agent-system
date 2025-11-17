@@ -1,8 +1,9 @@
 requests
 beautifulsoup4
 python-dotenv
-mistral
+mistralai
 langgraph
 selenium
 playwright
 streamlit
+python-whois

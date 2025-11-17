@@ -1,0 +1,77 @@
+{
+  "capabilities": [
+    {
+      "detail": "Domain detected: amazon.com",
+      "label": "Domain Lookup",
+      "status": "pass"
+    },
+    {
+      "detail": "Domain age reported as 31y 0m (since 1994-11-01)",
+      "label": "Domain Age",
+      "status": "pass"
+    },
+    {
+      "detail": "Web presence status: not_found",
+      "label": "Web Presence",
+      "status": "missing"
+    },
+    {
+      "detail": "Press mentions found: 0",
+      "label": "Press Mentions",
+      "status": "pass"
+    },
+    {
+      "detail": "HR contacts discovered: 0",
+      "label": "HR / Contact Info",
+      "status": "pass"
+    },
+    {
+      "detail": "Team links detected: 0",
+      "label": "Team Links",
+      "status": "pass"
+    },
+    {
+      "detail": "Recent regulatory filings detected",
+      "label": "Regulatory Filings",
+      "status": "pass"
+    },
+    {
+      "detail": "Legitimacy score: 80/100",
+      "label": "Reputation Score",
+      "status": "pass"
+    }
+  ],
+  "company": "Amazon",
+  "domain": "amazon.com",
+  "error": null,
+  "flags": {
+    "acquisition": [],
+    "content": [],
+    "financial": [],
+    "intelligence": [],
+    "verification": [
+      "No contact email found in posting"
+    ]
+  },
+  "intel": {
+    "company_domain": "amazon.com",
+    "company_name": "Amazon",
+    "domain_age": "31y 0m (since 1994-11-01)",
+    "hr_contacts": [],
+    "hr_contacts_status": "not_visible",
+    "inferred_domain": "amazon.com",
+    "job_role": "Diagnostic Run",
+    "legitimacy_score": 80,
+    "llm_confidence": 80,
+    "llm_summary": "Amazon appears to be a legitimate company with a strong online presence and recent filings.",
+    "press_mentions": [],
+    "recent_filings": true,
+    "source_domain": "amazon.com",
+    "team_links": [],
+    "trusted_inference": true,
+    "web_presence": [],
+    "web_presence_status": "not_found"
+  },
+  "timestamp": "2025-11-11T18:26:49.942491",
+  "url": "https://www.amazon.jobs/en/jobs/3124398/senior-tax-analyst-withholding-tax"
+}

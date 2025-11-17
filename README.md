@@ -1,70 +1,84 @@
 # Job Verifier Multi-Agent System
 
-A Python-based multi-agent workflow that analyzes job postings for potential fraud signals using rule-based heuristics, OSINT checks, and optional Mistral LLM assistance. The project includes a Streamlit dashboard for interactive reviews and can be run headlessly from the CLI.
+Production-ready Python project that analyzes job postings for potential fraud using a LangGraph workflow, rule-based heuristics, OSINT enrichment, and optional Mistral LLM support. A Streamlit dashboard offers an interactive review experience while the CLI provides quick verdicts.
 
-## Features
+## Project Layout
 
-- **Agent Orchestrator** built on LangGraph with data acquisition, content analysis, source verification, financial risk, and company intelligence steps.
-- **Scraping engine** with requests fallback to Playwright/Selenium for JavaScript-rendered postings.
-- **Company intelligence** enrichment pulling LinkedIn, press mentions, SEC filings, and HR contact signals.
-- **Mistral LLM integration** (optional) for language quality, contact filtering, and narrative summaries.
-- **Streamlit UI** that presents verdicts, risk scores, flags, and insight details with a history sidebar.
+```
+app/
+	agents/           # Core agent implementations
+	config/           # Environment-backed settings
+	services/         # External service clients (scraper, LLM, analysis)
+	utils/            # Shared constants, prompts, and logging helpers
+	workflows/        # LangGraph pipeline orchestration
+	main.py           # CLI entry point
+tests/              # Placeholder tests ready for expansion
+app.py              # Streamlit dashboard entry
+main.py             # Thin wrapper delegating to app.main
+```
 
-## Requirements
+The project is intentionally minimal—only the `app` package (and thin wrappers for the CLI and Streamlit UI) remain.
+
+## Prerequisites
 
 - Python 3.12+
-- Recommended: Chromium (for Playwright) and ChromeDriver (for Selenium fallback)
-- Optional: Mistral API key for LLM-powered features
+- Optional: Chromium browser (Playwright) and ChromeDriver (Selenium) for JS-heavy scraping
+- Optional: Mistral API key to enable LLM-backed features
 
-Install dependencies:
+Install dependencies and, if needed, browser drivers:
 
 ```bash
 pip install -r requirements.txt
-python -m playwright install chromium  # if Playwright is enabled
+python -m playwright install chromium  # optional JS-rendering support
 ```
 
-## Environment Variables
+## Configuration
 
-Create a `.env` file at the project root:
+Create a `.env` file in the project root to configure LLM access:
 
 ```ini
-MISTRAL_API_KEY=your_mistral_key_here  # optional; omit to disable LLM calls
+# Default: hosted Mistral
+LLM_PROVIDER=mistral
+MISTRAL_API_KEY=your_mistral_key_here
+
+# Optional: switch to a local Ollama model
+# LLM_PROVIDER=ollama
+# OLLAMA_MODEL=mistral
+# OLLAMA_HOST=http://localhost:11434
 ```
 
-The application degrades gracefully when the key is absent or the `mistralai` SDK is not installed.
+The application will automatically disable LLM features when the key or package is missing.
 
-## Running the CLI Analyzer
+### Using a Local Ollama Model
 
-Use the orchestrator to analyze a single job posting:
+1. Install [Ollama](https://ollama.com/download) and run it locally (the default API endpoint is `http://localhost:11434`).
+2. Pull or create the model you want, for example `ollama pull mistral` or `ollama pull llama3`.
+3. Set `LLM_PROVIDER=ollama` and `OLLAMA_MODEL` to the name you pulled.
+4. Restart the CLI or Streamlit app; the agents will send chat requests to the local Ollama endpoint instead of the hosted Mistral API.
 
-```bash
-python main.py
-# Enter the job URL when prompted
-```
+## Usage
 
-The CLI prints a verdict, risk score, flags, and a compact summary dictionary.
+- **CLI Analyzer:** `python main.py` then provide a job URL when prompted.
+- **Streamlit Dashboard:** `streamlit run app.py` and open the provided local URL.
 
-## Running the Streamlit Frontend
+Both entry points surface the orchestrated verdict, confidence, risk score, agent flags, and supporting insights.
 
-Launch the dashboard:
+## Testing
 
-```bash
-streamlit run app.py
-```
-
-Open the provided URL in your browser (default: <http://localhost:8501>) and paste job posting URLs to view detailed analysis results. The app stores recent history in the session and highlights scraping issues, risk flags, and company intelligence.
+A placeholder test resides in `tests/test_placeholder.py`; add unit or integration coverage here as the project evolves.
 
 ## Development Notes
 
-- The code lives under `src/jobverifier/` following a modular layout for agents, services, and pipeline definitions.
-- Browser automation is optional; enable it by ensuring Playwright/Selenium dependencies are installed. The data acquisition agent automatically attempts JS rendering on trusted domains when descriptions are too short.
-- For reproducible deployments, keep `.env` out of version control (see `.gitignore`).
+- Agents share prompts, constants, and logging via `app.utils` to ensure consistent behavior.
+- The orchestrator in `app.workflows` assembles agents through LangGraph; adjust the graph to experiment with new steps.
+- `.env` remains ignored by git for safety; configure environment variables per deployment.
 
-## Contributing / Extending
+## Contributing
 
 1. Fork or clone the repository.
-2. Create a virtual environment and install requirements.
-3. Run unit or integration tests (if added) before submitting changes.
-4. Enhance agents by adding new heuristics or integrating additional data sources.
+2. Create a virtual environment and install dependencies.
+3. Implement or adjust features under the `app/` package.
+4. Add or update tests under `tests/` as coverage grows.
+5. Submit a pull request describing the motivation and verification steps.
 
-Feel free to open issues or submit pull requests for bug fixes, improvements, or new agent ideas.Lesly
+Feedback and contributions are welcome—feel free to open issues or propose enhancements.
